@@ -422,7 +422,18 @@ export async function importDB(options: ImportOptions): Promise<void> {
       return insertRecords(store, records, strategy);
     });
 
-    await Promise.all(insertPromises);
+    try {
+      await Promise.all(insertPromises);
+    } catch (error) {
+      // A record that throws before it reaches IndexedDB doesn't fail the transaction,
+      // so the records queued ahead of it would still be committed.
+      try {
+        transaction.abort();
+      } catch {
+        // Already aborted, by a request that failed in IndexedDB itself.
+      }
+      throw error;
+    }
 
     // Wait for the transaction to complete
     await new Promise<void>((resolve, reject) => {

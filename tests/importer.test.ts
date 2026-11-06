@@ -32,6 +32,62 @@ function buildBackup(
   };
 }
 
+describe('importDB with a record it cannot write', () => {
+  it('"merge" writes nothing when a record has no key', async () => {
+    const dbName = uniqueDBName('merge-record-without-key');
+    const db = await createTestDB(dbName, 1, [
+      { name: 'items', keyPath: 'id', records: [{ value: { id: 1, name: 'Old' } }] },
+      { name: 'logs', keyPath: 'id', records: [] },
+    ]);
+    db.close();
+
+    const store = { keyPath: 'id', autoIncrement: false, indexes: [] };
+    const backup = buildBackup({
+      schema: { logs: store, items: store },
+      stores: {
+        logs: [{ key: 7, value: { id: 7, text: 'New log' } }],
+        items: [
+          { key: 1, value: { id: 1, name: 'New' } },
+          { key: 2, value: { name: 'No id' } },
+        ],
+      },
+    });
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'merge' })).rejects.toThrow();
+
+    expect((await readAllFromStore(dbName, 'items')).map((r) => r.value)).toEqual([
+      { id: 1, name: 'Old' },
+    ]);
+    expect(await readAllFromStore(dbName, 'logs')).toEqual([]);
+  });
+
+  it('"merge" writes nothing when a record cannot be decoded', async () => {
+    const dbName = uniqueDBName('merge-bad-record');
+    const db = await createTestDB(dbName, 1, [
+      { name: 'items', keyPath: 'id', records: [{ value: { id: 1, name: 'Old' } }] },
+    ]);
+    db.close();
+
+    const backup = buildBackup({
+      schema: { items: { keyPath: 'id', autoIncrement: false, indexes: [] } },
+      stores: {
+        items: [
+          { key: 1, value: { id: 1, name: 'New' } },
+          { key: 2, value: { id: 2, at: { __type: 'date', value: 'not-a-date' } } },
+        ],
+      },
+    });
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'merge' })).rejects.toThrow(
+      /Invalid date/,
+    );
+
+    expect((await readAllFromStore(dbName, 'items')).map((r) => r.value)).toEqual([
+      { id: 1, name: 'Old' },
+    ]);
+  });
+});
+
 describe('importDB', () => {
   // ─── Happy-path tests ──────────────────────────────────────────────
 

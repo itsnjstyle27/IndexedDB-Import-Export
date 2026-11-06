@@ -67,6 +67,51 @@ function deleteDatabase(dbName: string): Promise<void> {
 }
 
 /**
+ * Check that no other connection would block replacing a database.
+ *
+ * A blocked `deleteDatabase` cannot be cancelled: it still runs once the other
+ * connections close, long after the import reported the failure. A version
+ * change can be cancelled, so this starts one and always aborts it, which leaves
+ * the database as it was whether or not it was blocked.
+ *
+ * @param dbName - The name of the database about to be deleted.
+ * @returns A promise that resolves if nothing blocks the version change, and rejects if something does.
+ */
+function assertNotBlocked(dbName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const probeRequest = indexedDB.open(dbName);
+
+    probeRequest.onsuccess = () => {
+      const version = probeRequest.result.version;
+      probeRequest.result.close();
+
+      const request = indexedDB.open(dbName, version + 1);
+
+      request.onupgradeneeded = () => {
+        request.transaction?.abort();
+      };
+
+      // Aborting the version change above always ends the request here.
+      request.onerror = () => {
+        resolve();
+      };
+
+      request.onblocked = () => {
+        reject(
+          new Error(
+            `Database "${dbName}" deletion blocked. Close all other connections to this database and try again.`,
+          ),
+        );
+      };
+    };
+
+    probeRequest.onerror = () => {
+      reject(new Error(`Failed to probe database "${dbName}": ${String(probeRequest.error)}`));
+    };
+  });
+}
+
+/**
  * Narrow a store-keyed record from the backup to the caller's `storeNames` selection.
  *
  * Used for both `schema` and `stores`, so a selection scopes structure and data
@@ -162,7 +207,8 @@ async function openDatabaseForImport(
   strategy: 'overwrite' | 'merge',
 ): Promise<IDBDatabase> {
   if (strategy === 'overwrite') {
-    // Delete the existing database entirely
+    // Delete the existing database entirely, once nothing can block the delete
+    await assertNotBlocked(dbName);
     await deleteDatabase(dbName);
 
     // Recreate with the backup's version and schema

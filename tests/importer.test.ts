@@ -1019,3 +1019,59 @@ describe('importDB — onBeforeImport hook', () => {
     expect(records[0]!.value).toEqual({ id: 1, name: 'Original' });
   });
 });
+
+describe('importDB overwrite while another connection is open', () => {
+  const users = [{ name: 'users', keyPath: 'id', records: [{ value: { id: 1, name: 'Alice' } }] }];
+  const backup = buildBackup({
+    databaseVersion: 3,
+    schema: { users: { keyPath: 'id', autoIncrement: false, indexes: [] } },
+    stores: { users: [{ key: 2, value: { id: 2, name: 'Bob' } }] },
+  });
+
+  it('keeps the database when the import is blocked, also after the connection closes', async () => {
+    const dbName = uniqueDBName('blocked-overwrite');
+    const db = await createTestDB(dbName, 3, users);
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'overwrite' })).rejects.toThrow(
+      /blocked/,
+    );
+
+    db.close();
+
+    // Requests for a database run in order, so this only reads once whatever
+    // the blocked import left pending has run.
+    expect(await readAllFromStore(dbName, 'users')).toEqual([
+      { key: 1, value: { id: 1, name: 'Alice' } },
+    ]);
+  });
+
+  it('imports on a retry after the connection closes', async () => {
+    const dbName = uniqueDBName('blocked-retry');
+    const db = await createTestDB(dbName, 3, users);
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'overwrite' })).rejects.toThrow(
+      /blocked/,
+    );
+    db.close();
+
+    await importDB({ dbName, backupData: backup, strategy: 'overwrite' });
+
+    expect(await readAllFromStore(dbName, 'users')).toEqual([
+      { key: 2, value: { id: 2, name: 'Bob' } },
+    ]);
+  });
+
+  it('imports when the other connection closes itself on versionchange', async () => {
+    const dbName = uniqueDBName('versionchange-close');
+    const db = await createTestDB(dbName, 3, users);
+    db.onversionchange = () => {
+      db.close();
+    };
+
+    await importDB({ dbName, backupData: backup, strategy: 'overwrite' });
+
+    expect(await readAllFromStore(dbName, 'users')).toEqual([
+      { key: 2, value: { id: 2, name: 'Bob' } },
+    ]);
+  });
+});

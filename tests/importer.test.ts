@@ -32,6 +32,59 @@ function buildBackup(
   };
 }
 
+describe('importDB with something that is not a backup', () => {
+  const validStore = { keyPath: 'id', autoIncrement: false, indexes: [] };
+
+  it.each<[string, unknown]>([
+    ['null', null],
+    ['an array', []],
+    ['an unrelated JSON file', { name: 'my-app', dependencies: {} }],
+    ['no schema', { ...buildBackup(), schema: undefined }],
+    ['no stores', { ...buildBackup(), stores: undefined }],
+    ['a schema that is a list', { ...buildBackup(), schema: [] }],
+    ['a version of 0', { ...buildBackup(), databaseVersion: 0 }],
+    ['a version that is text', { ...buildBackup(), databaseVersion: '1' }],
+    ['a store without indexes', { ...buildBackup(), schema: { items: { keyPath: 'id' } } }],
+    ['a store with no schema entry', { ...buildBackup(), schema: { items: null } }],
+    [
+      'records that are not a list',
+      { ...buildBackup(), schema: { items: validStore }, stores: { items: {} } },
+    ],
+    [
+      'a record that is not an object',
+      { ...buildBackup(), schema: { items: validStore }, stores: { items: [1] } },
+    ],
+  ])('rejects %s and keeps the existing data', async (_name, backupData) => {
+    const dbName = uniqueDBName('not-a-backup');
+    const db = await createTestDB(dbName, 1, [
+      { name: 'items', keyPath: 'id', records: [{ value: { id: 1, name: 'Old' } }] },
+    ]);
+    db.close();
+
+    await expect(
+      importDB({ dbName, backupData: backupData as ExportFormat, strategy: 'overwrite' }),
+    ).rejects.toThrow(/not a valid backup/);
+
+    const records = await readAllFromStore(dbName, 'items');
+    expect(records.map((r) => r.value)).toEqual([{ id: 1, name: 'Old' }]);
+  });
+
+  it('does not call onBeforeImport for something that is not a backup', async () => {
+    const onBeforeImport = vi.fn(() => true);
+
+    await expect(
+      importDB({
+        dbName: uniqueDBName('not-a-backup-hook'),
+        backupData: {} as ExportFormat,
+        strategy: 'merge',
+        onBeforeImport,
+      }),
+    ).rejects.toThrow(/not a valid backup/);
+
+    expect(onBeforeImport).not.toHaveBeenCalled();
+  });
+});
+
 describe('importDB', () => {
   // ─── Happy-path tests ──────────────────────────────────────────────
 

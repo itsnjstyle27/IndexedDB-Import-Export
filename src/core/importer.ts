@@ -38,6 +38,48 @@ function buildImportSummary(
   };
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Check that a parsed file has the shape of a backup.
+ *
+ * A backup usually comes straight from `readFileAsJSON`, so it can be any JSON at
+ * all. This has to run first, because the `"overwrite"` strategy deletes the
+ * database before it would otherwise find out that the file can't be restored.
+ *
+ * @param backupData - The value passed to `importDB`.
+ * @throws If the value is not a backup, naming the part that is wrong.
+ */
+function assertValidBackup(backupData: unknown): void {
+  const invalid = (reason: string): Error => new Error(`This is not a valid backup: ${reason}.`);
+
+  if (!isObject(backupData)) {
+    throw invalid('it is not an object');
+  }
+  const { databaseVersion, schema, stores } = backupData;
+  if (!Number.isInteger(databaseVersion) || (databaseVersion as number) < 1) {
+    throw invalid('"databaseVersion" is not a positive whole number');
+  }
+  if (!isObject(schema)) {
+    throw invalid('"schema" is not an object');
+  }
+  if (!isObject(stores)) {
+    throw invalid('"stores" is not an object');
+  }
+  for (const [name, store] of Object.entries(schema)) {
+    if (!isObject(store) || !Array.isArray(store['indexes'])) {
+      throw invalid(`the schema of store "${name}" has no list of indexes`);
+    }
+  }
+  for (const [name, records] of Object.entries(stores)) {
+    if (!Array.isArray(records) || !records.every(isObject)) {
+      throw invalid(`the records of store "${name}" are not a list of objects`);
+    }
+  }
+}
+
 /**
  * Delete an IndexedDB database by name.
  *
@@ -349,7 +391,8 @@ function insertRecords(
  *   any `storeNames` selection) before anything is written; return `false` to abort the import
  *   without writing or deleting any data.
  * @returns A promise that resolves when the import is complete, or resolves early without changes
- *   if `onBeforeImport` returns `false`.
+ *   if `onBeforeImport` returns `false`. It rejects before changing anything if `backupData` does
+ *   not have the shape of a backup.
  *
  * @example
  * ```typescript
@@ -380,6 +423,8 @@ function insertRecords(
  */
 export async function importDB(options: ImportOptions): Promise<void> {
   const { dbName, backupData, strategy, storeNames, onBeforeImport } = options;
+
+  assertValidBackup(backupData);
 
   // A selection scopes the whole import. Narrowing the schema as well as the records
   // is what keeps a partial restore from quietly recreating the stores the caller

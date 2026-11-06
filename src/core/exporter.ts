@@ -46,10 +46,21 @@ function readAllRecords(store: IDBObjectStore): Promise<Array<{ key: unknown; va
     request.onsuccess = () => {
       const cursor = request.result;
       if (cursor) {
-        records.push({
-          key: serialize(cursor.primaryKey),
-          value: serialize(cursor.value),
-        });
+        // An error thrown from this event handler would not reach the promise,
+        // and the export would never settle.
+        try {
+          records.push({
+            key: serialize(cursor.primaryKey),
+            value: serialize(cursor.value),
+          });
+        } catch (error) {
+          reject(
+            new Error(
+              `Failed to serialize record "${String(cursor.primaryKey)}" in store "${store.name}": ${String(error)}`,
+            ),
+          );
+          return;
+        }
         cursor.continue();
       } else {
         resolve(records);
@@ -92,7 +103,8 @@ function openDatabase(dbName: string): Promise<IDBDatabase> {
  * @param options - Export configuration.
  * @param options.dbName - The name of the IndexedDB database to export.
  * @param options.storeNames - Optional list of store names to export. If omitted, all stores are exported.
- * @returns A promise that resolves to the ExportFormat JSON object.
+ * @returns A promise that resolves to the ExportFormat JSON object. It rejects if a record cannot
+ *   be serialized, such as one with a cycle or an invalid Date.
  *
  * @example
  * ```typescript

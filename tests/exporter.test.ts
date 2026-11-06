@@ -26,6 +26,36 @@ describe('exportDB', () => {
     expect(values).toContainEqual({ id: 2, name: 'Bob' });
   });
 
+  it('rejects when a record has an invalid Date', async () => {
+    const dbName = uniqueDBName('invalid-date');
+    const db = await createTestDB(dbName, 1, [
+      {
+        name: 'events',
+        keyPath: 'id',
+        records: [{ value: { id: 7, at: new Date('not-a-date') } }],
+      },
+    ]);
+    db.close();
+
+    await expect(exportDB({ dbName })).rejects.toThrow(
+      /Failed to serialize record "7" in store "events": RangeError/,
+    );
+  });
+
+  it('rejects when a record has a cycle', async () => {
+    const dbName = uniqueDBName('cycle');
+    const record: Record<string, unknown> = { id: 1 };
+    record['self'] = record;
+    const db = await createTestDB(dbName, 1, [
+      { name: 'nodes', keyPath: 'id', records: [{ value: record }] },
+    ]);
+    db.close();
+
+    await expect(exportDB({ dbName })).rejects.toThrow(
+      /Failed to serialize record "1" in store "nodes": RangeError/,
+    );
+  });
+
   it('exports multiple stores with selective storeNames filter', async () => {
     const dbName = uniqueDBName('multi-store');
     const db = await createTestDB(dbName, 1, [

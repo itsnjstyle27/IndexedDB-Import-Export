@@ -1019,3 +1019,77 @@ describe('importDB — onBeforeImport hook', () => {
     expect(records[0]!.value).toEqual({ id: 1, name: 'Original' });
   });
 });
+
+describe('importDB merge while another connection is open', () => {
+  const backup = buildBackup({
+    schema: {
+      users: { keyPath: 'id', autoIncrement: false, indexes: [] },
+      posts: { keyPath: 'id', autoIncrement: false, indexes: [] },
+    },
+    stores: { posts: [{ key: 1, value: { id: 1, title: 'Hello' } }] },
+  });
+
+  const openedDatabase = (dbName: string) =>
+    new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(dbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(new Error(String(request.error)));
+    });
+
+  const deleted = (dbName: string) =>
+    new Promise<string>((resolve) => {
+      const request = indexedDB.deleteDatabase(dbName);
+      request.onsuccess = () => resolve('deleted');
+      request.onerror = () => resolve('error');
+      request.onblocked = () => resolve('blocked');
+    });
+
+  it('leaves the database unchanged when the import is blocked, also after the connection closes', async () => {
+    const dbName = uniqueDBName('blocked-merge');
+    const db = await createTestDB(dbName, 2, [{ name: 'users', keyPath: 'id' }]);
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'merge' })).rejects.toThrow(
+      /blocked/,
+    );
+
+    db.close();
+
+    // Requests for a database run in order, so this only opens once whatever the
+    // blocked import left pending has run.
+    const after = await openedDatabase(dbName);
+    expect(after.version).toBe(2);
+    expect(Array.from(after.objectStoreNames)).toEqual(['users']);
+    after.close();
+  });
+
+  it('leaves no connection open that would block later work', async () => {
+    const dbName = uniqueDBName('blocked-merge-leak');
+    const db = await createTestDB(dbName, 2, [{ name: 'users', keyPath: 'id' }]);
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'merge' })).rejects.toThrow(
+      /blocked/,
+    );
+    db.close();
+
+    const after = await openedDatabase(dbName);
+    after.close();
+
+    expect(await deleted(dbName)).toBe('deleted');
+  });
+
+  it('imports on a retry after the connection closes', async () => {
+    const dbName = uniqueDBName('blocked-merge-retry');
+    const db = await createTestDB(dbName, 2, [{ name: 'users', keyPath: 'id' }]);
+
+    await expect(importDB({ dbName, backupData: backup, strategy: 'merge' })).rejects.toThrow(
+      /blocked/,
+    );
+    db.close();
+
+    await importDB({ dbName, backupData: backup, strategy: 'merge' });
+
+    expect(await readAllFromStore(dbName, 'posts')).toEqual([
+      { key: 1, value: { id: 1, title: 'Hello' } },
+    ]);
+  });
+});

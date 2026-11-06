@@ -235,8 +235,17 @@ async function openDatabaseForImport(
 
       // Need to add stores — bump version by 1 to trigger onupgradeneeded
       const upgradeRequest = indexedDB.open(dbName, currentVersion + 1);
+      let blocked = false;
 
       upgradeRequest.onupgradeneeded = () => {
+        // A blocked upgrade still runs once the other connections close, after the
+        // import has already failed. Cancel it, so the database stays as it was and
+        // no connection is left open.
+        if (blocked) {
+          upgradeRequest.transaction?.abort();
+          return;
+        }
+
         const db = upgradeRequest.result;
         createStoresFromSchema(db, schema, strategy);
       };
@@ -252,6 +261,7 @@ async function openDatabaseForImport(
       };
 
       upgradeRequest.onblocked = () => {
+        blocked = true;
         reject(
           new Error(
             `Database "${dbName}" upgrade blocked. Close all other connections and try again.`

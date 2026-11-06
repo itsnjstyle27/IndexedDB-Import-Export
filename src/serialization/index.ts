@@ -150,6 +150,7 @@ function expectStringFields<K extends string>(
  *
  * @param value - The value to serialize.
  * @returns The serialized value, safe for `JSON.stringify`.
+ * @throws A `TypeError` for a value that JSON can't hold, such as a `Blob` or a `File`.
  */
 export function serialize(value: unknown): unknown {
   // Uint8Array → tagged base64
@@ -215,6 +216,16 @@ export function serialize(value: unknown): unknown {
       return { __type: SERIALIZATION_TAGS.OBJECT, value: fields } satisfies TaggedValue;
     }
     return fields;
+  }
+
+  // IndexedDB can store a Blob, a File or an Error, but each would be `{}` in the file.
+  // A boxed primitive is fine, as JSON keeps it as the primitive.
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    !(value instanceof Boolean || value instanceof Number || value instanceof String)
+  ) {
+    throw new TypeError(`A ${value.constructor?.name ?? 'value'} cannot be saved in a backup.`);
   }
 
   // JSON-safe primitives pass through unchanged

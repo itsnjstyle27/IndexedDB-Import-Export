@@ -1,9 +1,26 @@
+import { Blob as NodeBlob } from 'node:buffer';
 import { describe, it, expect } from 'vitest';
 import { exportDB } from '../src/core/exporter.js';
 import { BACKUP_VERSION } from '../src/serialization/index.js';
 import { setupFakeIDB, uniqueDBName, createTestDB } from './helpers/idb-helpers.js';
 
 setupFakeIDB();
+
+describe('exportDB with a value a backup cannot hold', () => {
+  it('rejects and names the store and record', async () => {
+    const dbName = uniqueDBName('export-blob');
+    const db = await createTestDB(dbName, 1, [
+      {
+        name: 'photos',
+        keyPath: 'id',
+        records: [{ value: { id: 3, file: new NodeBlob(['photo']) } }],
+      },
+    ]);
+    db.close();
+
+    await expect(exportDB({ dbName })).rejects.toThrow(/record "3" in store "photos".*Blob/);
+  });
+});
 
 describe('exportDB', () => {
   it('exports a single object store with simple records', async () => {

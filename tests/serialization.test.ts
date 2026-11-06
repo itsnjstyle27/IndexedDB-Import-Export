@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { Blob as NodeBlob, File as NodeFile } from 'node:buffer';
 import { serialize, deserialize } from '../src/serialization/index.js';
 
 describe('bigint serialization', () => {
@@ -249,5 +250,26 @@ describe('RegExp serialization', () => {
 
   it('throws on a malformed payload', () => {
     expect(() => deserialize({ __type: 'regex', value: { source: 'a' } })).toThrow(TypeError);
+  });
+});
+
+// The real classes from Node, as happy-dom's Blob isn't one structuredClone keeps.
+describe('values a backup cannot hold', () => {
+  it.each<[string, unknown]>([
+    ['Blob', new NodeBlob(['photo'])],
+    ['File', new NodeFile(['photo'], 'photo.png')],
+    ['Error', new Error('boom')],
+    ['TypeError', new TypeError('boom')],
+  ])('refuses a %s, which would be an empty object in the file', (name, value) => {
+    expect(() => serialize(value)).toThrow(`A ${name} cannot be saved in a backup.`);
+    expect(() => serialize({ nested: [value] })).toThrow(`A ${name} cannot be saved in a backup.`);
+  });
+
+  it.each<[string, unknown]>([
+    ['Boolean', Object(true)],
+    ['Number', Object(1)],
+    ['String', Object('text')],
+  ])('still accepts a boxed %s, which JSON keeps as a primitive', (_name, value) => {
+    expect(serialize(value)).toBe(value);
   });
 });
